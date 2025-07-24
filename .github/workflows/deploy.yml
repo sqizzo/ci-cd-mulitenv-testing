@@ -2,82 +2,22 @@ name: Deploy to EC2
 
 on:
   push:
-    branches:
-      - dev
+    branches: [dev]
 
 jobs:
   deploy:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout Repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-      - name: Setup SSH
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.EC2_STAGING_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            rm -rf ~/evently
-            mkdir -p ~/evently
+      - name: Upload deploy.sh ke EC2
+        run: |
+          echo "${{ secrets.SSH_KEY }}" > key.pem
+          chmod 600 key.pem
+          scp -o StrictHostKeyChecking=no -i key.pem deploy.sh ubuntu@${{ secrets.EC2_HOST }}:/home/ubuntu/deploy.sh
 
-      - name: Upload Project Files to EC2
-        uses: appleboy/scp-action@master
-        with:
-          host: ${{ secrets.EC2_STAGING_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          source: "."
-          target: "~/evently"
-
-      - name: Deploy Docker Client & Server
-        uses: appleboy/ssh-action@v1.0.0
-        with:
-          host: ${{ secrets.EC2_STAGING_HOST }}
-          username: ${{ secrets.EC2_USER }}
-          key: ${{ secrets.EC2_KEY }}
-          script: |
-            cd ~/evently
-
-            # Remove old containers
-            docker rm -f evently_client || true
-            docker rm -f evently_server || true
-
-            # Build client
-            cd client
-            docker build -t evently-client .
-            cd ..
-
-            # Build server
-            cd server
-            docker build -t evently-server .
-            cd ..
-
-            # Run client
-            docker run -d \
-              --name evently_client \
-              -p 5173:5173 \
-              -e VITE_SERVER_URL=${{ secrets.HOSTNAME }} \
-              evently-client
-
-            # Run server
-            docker run -d \
-              --name evently_server \
-              -p 5000:5000 \
-              -e PORT=${{ secrets.PORT }} \
-              -e HOSTNAME=${{ secrets.HOSTNAME }} \
-              -e MONGO_URL=${{ secrets.MONGO_URL }} \
-              -e CLIENT_URL=${{ secrets.CLIENT_URL }} \
-              -e NODEMAILER_HOST=${{ secrets.NODEMAILER_HOST }} \
-              -e NODEMAILER_PORT=${{ secrets.NODEMAILER_PORT }} \
-              -e NODEMAILER_UNAME=${{ secrets.NODEMAILER_UNAME }} \
-              -e NODEMAILER_PASS=${{ secrets.NODEMAILER_PASS }} \
-              -e JWT_SECRET=${{ secrets.JWT_SECRET }} \
-              -e GOOGLE_CLIENTID=${{ secrets.GOOGLE_CLIENTID }} \
-              -e GOOGLE_CLIENTSECRET=${{ secrets.GOOGLE_CLIENTSECRET }} \
-              -e CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }} \
-              -e CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }} \
-              -e CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }} \
-              evently-server
+      - name: Jalankan deploy.sh di EC2
+        run: |
+          ssh -o StrictHostKeyChecking=no -i key.pem ubuntu@${{ secrets.EC2_HOST }} "chmod +x deploy.sh && ./deploy.sh"
