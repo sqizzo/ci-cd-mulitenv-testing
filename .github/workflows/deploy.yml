@@ -1,79 +1,78 @@
-name: 🚀 Deploy Evently to EC2
+name: Deploy to EC2 with Docker
 
 on:
   push:
     branches:
-      - main
+      - staging
 
 jobs:
   deploy:
-    name: Deploy to EC2
     runs-on: ubuntu-latest
 
     steps:
-      - name: ⬇️ Checkout repo
-        uses: actions/checkout@v3
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - name: 🔐 Set up SSH
-        uses: webfactory/ssh-agent@v0.7.0
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
         with:
-          ssh-private-key: ${{ secrets.EC2_SSH_PRIVATE_KEY }}
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: 🚀 Deploy app on EC2
-        run: |
-          ssh -o StrictHostKeyChecking=no ec2-user@${{ secrets.EC2_HOST }} << 'EOF'
+      - name: Build and push evently-server image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./server
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/evently-server:staging
 
-            echo "📁 Navigating to deploy directory..."
-            mkdir -p ~/evently-deploy
-            cd ~/evently-deploy
+      - name: Build and push evently-client image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./client
+          push: true
+          tags: ${{ secrets.DOCKER_USERNAME }}/evently-client:staging
 
-            echo "📄 Writing .env file..."
-            cat <<EOT > .env
-            JWT_SECRET_KEY=${{ secrets.JWT_SECRET_KEY }}
-            GOOGLE_APP_PASSWORD=${{ secrets.GOOGLE_APP_PASSWORD }}
-            GOOGLE_CLIENT_ID=${{ secrets.GOOGLE_CLIENT_ID }}
-            GOOGLE_SECRET=${{ secrets.GOOGLE_SECRET }}
-            AWS_ACCESS_KEY_ID=${{ secrets.AWS_ACCESS_KEY_ID }}
-            AWS_SECRET_ACCESS_KEY=${{ secrets.AWS_SECRET_ACCESS_KEY }}
-            AWS_BUCKET_NAME=${{ secrets.AWS_BUCKET_NAME }}
-            AWS_REGION=${{ secrets.AWS_REGION }}
+      - name: Deploy to EC2 via SSH
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host: ${{ secrets.EC2_HOST }}
+          username: ${{ secrets.EC2_USERNAME }}
+          key: ${{ secrets.EC2_SSH_KEY }}
+          script: |
+            docker pull ${{ secrets.DOCKER_USERNAME }}/evently-server:staging
+            docker pull ${{ secrets.DOCKER_USERNAME }}/evently-client:staging
+
+            docker stop evently-server || true && docker rm evently-server || true
+            docker stop evently-client || true && docker rm evently-client || true
+
+            cat <<EOF > ~/evently.env
+            PORT=5000
+            HOSTNAME=0.0.0.0
             MONGO_URL=${{ secrets.MONGO_URL }}
             CLIENT_URL=${{ secrets.CLIENT_URL }}
             NODEMAILER_HOST=${{ secrets.NODEMAILER_HOST }}
             NODEMAILER_PORT=${{ secrets.NODEMAILER_PORT }}
             NODEMAILER_UNAME=${{ secrets.NODEMAILER_UNAME }}
             NODEMAILER_PASS=${{ secrets.NODEMAILER_PASS }}
-            EOT
+            JWT_SECRET=${{ secrets.JWT_SECRET }}
+            GOOGLE_CLIENTID=${{ secrets.GOOGLE_CLIENTID }}
+            GOOGLE_CLIENTSECRET=${{ secrets.GOOGLE_CLIENTSECRET }}
+            CLOUDINARY_CLOUD_NAME=${{ secrets.CLOUDINARY_CLOUD_NAME }}
+            CLOUDINARY_API_KEY=${{ secrets.CLOUDINARY_API_KEY }}
+            CLOUDINARY_API_SECRET=${{ secrets.CLOUDINARY_API_SECRET }}
+            EOF
 
-            echo "🐳 Pulling latest server image..."
-            docker pull ${{ secrets.DOCKER_USERNAME }}/evently-server:staging
-
-            echo "🧹 Removing old server container if exists..."
-            docker rm -f evently-server || true
-
-            echo "🚀 Running new server container..."
-            docker run -d \
-              --name evently-server \
-              --env-file .env \
-              -p 5000:5000 \
+            docker run -d --name evently-server -p 5000:5000 \
+              --env-file ~/evently.env \
               --health-cmd="curl -f http://localhost:5000/api/health || exit 1" \
               --health-interval=30s \
               --health-timeout=5s \
               --health-retries=3 \
               ${{ secrets.DOCKER_USERNAME }}/evently-server:staging
 
-            echo "🐳 Pulling latest client image..."
-            docker pull ${{ secrets.DOCKER_USERNAME }}/evently-client:staging
-
-            echo "🧹 Removing old client container if exists..."
-            docker rm -f evently-client || true
-
-            echo "🚀 Running new client container..."
-            docker run -d \
-              --name evently-client \
-              -p 80:5173 \
+            docker run -d --name evently-client -p 80:80 \
               ${{ secrets.DOCKER_USERNAME }}/evently-client:staging
-
-            echo "✅ Deployment finished!"
-
-          EOF
